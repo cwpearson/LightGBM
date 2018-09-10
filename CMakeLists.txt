@@ -1,14 +1,18 @@
-if(USE_GPU OR APPLE)
+if(USE_CUDA)
+  cmake_minimum_required(VERSION 3.11)
+  enable_language(CUDA)
+elseif(USE_GPU OR APPLE)
   cmake_minimum_required(VERSION 3.2)
 else()
   cmake_minimum_required(VERSION 2.8)
 endif()
 
-PROJECT(lightgbm)
+project(lightgbm LANGUAGES C CXX CUDA)
 
 OPTION(USE_MPI "MPI based parallel learning" OFF)
 OPTION(USE_OPENMP "Enable OpenMP" ON)
 OPTION(USE_GPU "Enable GPU-acclerated training (EXPERIMENTAL)" OFF)
+OPTION(USE_CUDA "Enable CUDA-accelerated training (EXPERIMENTAL)" ON)
 OPTION(USE_SWIG "Enable SWIG to generate Java API" OFF)
 OPTION(USE_HDFS "Enable HDFS support (EXPERIMENTAL)" OFF)
 OPTION(USE_R35 "Set to ON if your R version is not smaller than 3.5" OFF)
@@ -103,6 +107,17 @@ if(USE_GPU)
     ADD_DEFINITIONS(-DUSE_GPU)
 endif(USE_GPU)
 
+if(USE_CUDA)
+    ADD_DEFINITIONS(-DUSE_CUDA)
+    if (NOT DEFINED CMAKE_CUDA_STANDARD)
+      set(CMAKE_CUDA_STANDARD 11)
+      set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    endif()
+    find_package(Boost 1.56.0 COMPONENTS filesystem system REQUIRED)
+    include_directories(${Boost_INCLUDE_DIRS})
+
+endif(USE_CUDA) 
+
 if(USE_HDFS)
     find_package(JNI REQUIRED)
     find_path(HDFS_INCLUDE_DIR hdfs.h REQUIRED)
@@ -164,6 +179,7 @@ file(GLOB SOURCES
     src/objective/*.cpp
     src/network/*.cpp
     src/treelearner/*.cpp
+    src/treelearner/*.cu
 )
 
 add_executable(lightgbm src/main.cpp ${SOURCES})
