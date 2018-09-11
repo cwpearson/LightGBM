@@ -163,6 +163,7 @@ private:
   /*! \brief GPU context object */
   //::OpenCL boost::compute::context ctx_;
   /*! \brief GPU command queue object */
+  cudaStream_t stream_;
   //::OpenCL boost::compute::command_queue queue_;
   /*! \brief GPU kernel for 256 bins */
   //::OpenCL const char *kernel256_src_ = 
@@ -216,7 +217,7 @@ private:
   /*! \brief Multipliers of all dense feature-groups, used for redistributing bins */
   std::vector<int> device_bin_mults_;
   /*! \brief GPU memory object holding the training data */
-  std::unique_ptr<Feature4 *> device_features_;
+  Feature4 *device_features_;
   //::OpenCLstd::unique_ptr<boost::compute::vector<Feature4>> device_features_;
   /*! \brief GPU memory object holding the ordered gradient */
   score_t *device_gradients_;
@@ -245,19 +246,19 @@ private:
   /*! \brief Pointer to pinned memory of feature masks */
   //::OpenCL void * ptr_pinned_feature_masks_ = nullptr;
   /*! \brief GPU memory object holding indices of the leaf being processed */
-  std::unique_ptr<data_size_t*> device_data_indices_;
+  data_size_t *device_data_indices_;
   //::OpenCL std::unique_ptr<boost::compute::vector<data_size_t>> device_data_indices_;
   /*! \brief GPU memory object holding counters for workgroup coordination */
-  std::unique_ptr<int*> sync_counters_;
+  int *sync_counters_;
   //::OpenCL std::unique_ptr<boost::compute::vector<int>> sync_counters_;
   /*! \brief GPU memory object holding temporary sub-histograms per workgroup */
-  std::unique_ptr<char*> device_subhistograms_;
+  char *device_subhistograms_;
   //::OpenCL std::unique_ptr<boost::compute::vector<char>> device_subhistograms_;
   /*! \brief Host memory object for histogram output (GPU will write to Host memory directly) */
   void *device_histogram_outputs_;
   //::OpenCL boost::compute::buffer device_histogram_outputs_;
   /*! \brief Host memory pointer for histogram outputs */
-  void * host_histogram_outputs_;
+  void *host_histogram_outputs_;
   /*! \brief OpenCL waitlist object for waiting for data transfer before kernel execution */
   cudaEvent_t kernel_wait_obj_;
   //::OpenCLboost::compute::wait_list kernel_wait_obj_;

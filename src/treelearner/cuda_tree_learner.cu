@@ -213,7 +213,8 @@ template <typename HistType>
 void CUDATreeLearner::WaitAndGetHistograms(HistogramBinEntry* histograms) {
   HistType* hist_outputs = (HistType*) host_histogram_outputs_;
   // when the output is ready, the computation is done
-  histograms_wait_obj_.wait();
+  CUDASUCCESS_OR_FATAL(cudaEventSynchronize(histograms_wait_obj_));
+  //::OpenCL histograms_wait_obj_.wait();
   #pragma omp parallel for schedule(static)
   for(int i = 0; i < num_dense_feature_groups_; ++i) {
     if (!feature_masks_[i]) {
@@ -247,7 +248,8 @@ void CUDATreeLearner::WaitAndGetHistograms(HistogramBinEntry* histograms) {
       }
     }
   }
-  queue_.enqueue_unmap_buffer(device_histogram_outputs_, host_histogram_outputs_);
+  // FIXME: what to do here
+  //::OpenCL queue_.enqueue_unmap_buffer(device_histogram_outputs_, host_histogram_outputs_);
 }
 
 void CUDATreeLearner::AllocateGPUMemory() {
@@ -272,12 +274,9 @@ void CUDATreeLearner::AllocateGPUMemory() {
     return;
   }
   // allocate memory for all features (FIXME: 4 GB barrier on some devices, need to split to multiple buffers)
-  device_features_.reset();
-  {
-    Feature4 *p;
-    CUDASUCCESS_OR_FATAL(cudaMalloc(&p, num_dense_feature4_ * num_data_));
-    device_features_ = std::unique_ptr<Feature4*>(p);
-  }
+  CUDASUCCESS_OR_FATAL(cudaFree(device_features_));
+  CUDASUCCESS_OR_FATAL(cudaMalloc(&device_features_, num_dense_feature4_ * num_data_));
+  //::OpenCL device_features_.reset();
   //::OpenCL device_features_ = std::unique_ptr<boost::compute::vector<Feature4>>(new boost::compute::vector<Feature4>(num_dense_feature4_ * num_data_, ctx_));
   // unpin old buffer if necessary before destructing them
   //::OpenCL if (ptr_pinned_gradients_) {
@@ -326,6 +325,7 @@ void CUDATreeLearner::AllocateGPUMemory() {
   CUDASUCCESS_OR_FATAL(cudaMalloc(&device_feature_masks_, num_dense_feature4_ * dword_features_));
   CUDASUCCESS_OR_FATAL(cudaFreeHost(pinned_feature_masks_));
   CUDASUCCESS_OR_FATAL(cudaMallocHost(&pinned_feature_masks_, num_dense_feature4_ * dword_features_));
+  memset(pinned_feature_masks_, 0, num_dense_feature4_ * dword_features_);
   //::OpenCL device_feature_masks_ = boost::compute::buffer(); // deallocate
   //::OpenCL device_feature_masks_ = boost::compute::buffer(ctx_, num_dense_feature4_ * dword_features_, 
   //::OpenCL                         boost::compute::memory_object::read_only, nullptr);
@@ -334,11 +334,14 @@ void CUDATreeLearner::AllocateGPUMemory() {
   //::OpenCL                                            feature_masks_.data());
   //::OpenCL ptr_pinned_feature_masks_ = queue_.enqueue_map_buffer(pinned_feature_masks_, boost::compute::command_queue::map_write_invalidate_region,
   //::OpenCL                                                       0, num_dense_feature4_ * dword_features_);
-  memset(ptr_pinned_feature_masks_, 0, num_dense_feature4_ * dword_features_);
+  //::OpenCL memset(ptr_pinned_feature_masks_, 0, num_dense_feature4_ * dword_features_);
   // copy indices to the device
-  device_data_indices_.reset();
-  device_data_indices_ = std::unique_ptr<boost::compute::vector<data_size_t>>(new boost::compute::vector<data_size_t>(allocated_num_data_, ctx_));
-  boost::compute::fill(device_data_indices_->begin(), device_data_indices_->end(), 0, queue_);
+  CUDASUCCESS_OR_FATAL(cudaFree(device_data_indices_));
+  CUDASUCCESS_OR_FATAL(cudaMalloc(&device_data_indices_, allocated_num_data_ * sizeof(data_size_t)));
+  CUDASUCCESS_OR_FATAL(cudaMemsetAsync(device_data_indices_, 0, allocated_num_data_ * sizeof(data_size_t), stream_));
+  //::OpenCL device_data_indices_.reset();
+  //::OpenCL device_data_indices_ = std::unique_ptr<boost::compute::vector<data_size_t>>(new boost::compute::vector<data_size_t>(allocated_num_data_, ctx_));
+  //::OpenCL boost::compute::fill(device_data_indices_->begin(), device_data_indices_->end(), 0, queue_);
   // histogram bin entry size depends on the precision (single/double)
   hist_bin_entry_sz_ = config_->gpu_use_dp ? sizeof(HistogramBinEntry) : sizeof(GPUHistogramBinEntry);
   Log::Info("Size of histogram bin entry: %d", hist_bin_entry_sz_);
@@ -346,18 +349,24 @@ void CUDATreeLearner::AllocateGPUMemory() {
   // each work group generates a sub-histogram of dword_features_ features.
   if (!device_subhistograms_) {
     // only initialize once here, as this will not need to change when ResetTrainingData() is called
-    device_subhistograms_ = std::unique_ptr<boost::compute::vector<char>>(new boost::compute::vector<char>(
-                              preallocd_max_num_wg_ * dword_features_ * device_bin_size_ * hist_bin_entry_sz_, ctx_));
+    CUDASUCCESS_OR_FATAL(cudaMalloc(&device_subhistograms_, preallocd_max_num_wg_ * dword_features_ * device_bin_size_ * hist_bin_entry_sz_));
+    //::OpenCL device_subhistograms_ = std::unique_ptr<boost::compute::vector<char>>(new boost::compute::vector<char>(
+    //::OpenCL                           preallocd_max_num_wg_ * dword_features_ * device_bin_size_ * hist_bin_entry_sz_, ctx_));
   }
   // create atomic counters for inter-group coordination
-  sync_counters_.reset();
-  sync_counters_ = std::unique_ptr<boost::compute::vector<int>>(new boost::compute::vector<int>(
-                    num_dense_feature4_, ctx_));
-  boost::compute::fill(sync_counters_->begin(), sync_counters_->end(), 0, queue_);
+  CUDASUCCESS_OR_FATAL(cudaFree(sync_counters_));
+  CUDASUCCESS_OR_FATAL(cudaMalloc(&sync_counters_, num_dense_feature4_ * sizeof(int))); 
+  CUDASUCCESS_OR_FATAL(cudaMemsetAsync(sync_counters_, 0, num_dense_feature4_ * sizeof(int)));
+  //::OpenCL sync_counters_.reset();
+  //::OpenCL sync_counters_ = std::unique_ptr<boost::compute::vector<int>>(new boost::compute::vector<int>(
+  //::OpenCL                   num_dense_feature4_, ctx_));
+  //::OpenCL boost::compute::fill(sync_counters_->begin(), sync_counters_->end(), 0, queue_);
   // The output buffer is allocated to host directly, to overlap compute and data transfer
-  device_histogram_outputs_ = boost::compute::buffer(); // deallocate
-  device_histogram_outputs_ = boost::compute::buffer(ctx_, num_dense_feature4_ * dword_features_ * device_bin_size_ * hist_bin_entry_sz_, 
-                           boost::compute::memory_object::write_only | boost::compute::memory_object::alloc_host_ptr, nullptr);
+  CUDASUCCESS_OR_FATAL(cudaFree(device_histogram_outputs_));
+  CUDASUCCESS_OR_FATAL(cudaMalloc(&device_histogram_outputs_, num_dense_feature4_ * dword_features_ * device_bin_size_ * hist_bin_entry_sz_));
+  //::OpenCL device_histogram_outputs_ = boost::compute::buffer(); // deallocate
+  //::OpenCL device_histogram_outputs_ = boost::compute::buffer(ctx_, num_dense_feature4_ * dword_features_ * device_bin_size_ * hist_bin_entry_sz_, 
+  //::OpenCL                          boost::compute::memory_object::write_only | boost::compute::memory_object::alloc_host_ptr, nullptr);
   // find the dense feature-groups and group then into Feature4 data structure (several feature-groups packed into 4 bytes)
   int k = 0, copied_feature4 = 0;
   std::vector<int> dense_dword_ind(dword_features_);
@@ -393,22 +402,25 @@ void CUDATreeLearner::AllocateGPUMemory() {
   int nthreads = std::min(omp_get_max_threads(), (int)dense_feature_group_map_.size() / dword_features_);
   nthreads = std::max(nthreads, 1);
   std::vector<Feature4*> host4_vecs(nthreads);
-  std::vector<boost::compute::buffer> host4_bufs(nthreads);
-  std::vector<Feature4*> host4_ptrs(nthreads);
+  std::vector<Feature4*> host4_bufs(nthreads);
+  //::OpenCL std::vector<boost::compute::buffer> host4_bufs(nthreads);
+  //::OpenCL std::vector<Feature4*> host4_ptrs(nthreads);
   // preallocate arrays for all threads, and pin them
   for (int i = 0; i < nthreads; ++i) {
     host4_vecs[i] = (Feature4*)boost::alignment::aligned_alloc(4096, num_data_ * sizeof(Feature4));
-    host4_bufs[i] = boost::compute::buffer(ctx_, num_data_ * sizeof(Feature4), 
-                    boost::compute::memory_object::read_write | boost::compute::memory_object::use_host_ptr, 
-                    host4_vecs[i]);
-    host4_ptrs[i] = (Feature4*)queue_.enqueue_map_buffer(host4_bufs[i], boost::compute::command_queue::map_write_invalidate_region,
-                    0, num_data_ * sizeof(Feature4));
+    CUDASUCCESS_OR_FATAL(cudaMalloc(&host4_bufs[i], num_data_ * sizeof(Feature4)));
+    //::OpenCL host4_bufs[i] = boost::compute::buffer(ctx_, num_data_ * sizeof(Feature4), 
+    //::OpenCL                 boost::compute::memory_object::read_write | boost::compute::memory_object::use_host_ptr, 
+    //::OpenCL                 host4_vecs[i]);
+    //::OpenCL host4_ptrs[i] = (Feature4*)queue_.enqueue_map_buffer(host4_bufs[i], boost::compute::command_queue::map_write_invalidate_region,
+    //::OpenCL                 0, num_data_ * sizeof(Feature4));
   }
   // building Feature4 bundles; each thread handles dword_features_ features
   #pragma omp parallel for schedule(static)
   for (int i = 0; i < (int)(dense_feature_group_map_.size() / dword_features_); ++i) {
     int tid = omp_get_thread_num();
-    Feature4* host4 = host4_ptrs[tid];
+    Feature4* host4 = host4_vecs[tid];
+    //::OpenCL Feature4* host4 = host4_ptrs[tid];
     auto dense_ind = dense_feature_group_map_.begin() + i * dword_features_;
     auto dev_bin_mult = device_bin_mults_.begin() + i * dword_features_;
     #if GPU_DEBUG >= 1
@@ -475,10 +487,11 @@ void CUDATreeLearner::AllocateGPUMemory() {
     else {
       Log::Fatal("Bug in GPU tree builder: dword_features_ can only be 4 or 8");
     }
-    queue_.enqueue_write_buffer(device_features_->get_buffer(),
-                        i * num_data_ * sizeof(Feature4), num_data_ * sizeof(Feature4), host4);
+    CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(&device_features_[i * num_data_], host4, num_data_ * sizeof(Feature4), cudaMemcpyDefault, stream_));
+    //::OpenCL queue_.enqueue_write_buffer(device_features_->get_buffer(),
+    //::OpenCL                     i * num_data_ * sizeof(Feature4), num_data_ * sizeof(Feature4), host4);
     #if GPU_DEBUG >= 1
-    printf("first example of feature-group tuple is: %d %d %d %d\n", host4[0].s0, host4[0].s1, host4[0].s2, host4[0].s3);
+    printf("first example of feature-group tuple is: %d %d %d %d\n", host4[0].s[0], host4[0].s[1], host4[0].s[2], host4[0].s[3]);
     printf("Feature-groups copied to device with multipliers ");
     for (int l = 0; l < dword_features_; ++l) {
       printf("%d ", dev_bin_mult[l]);
@@ -488,7 +501,8 @@ void CUDATreeLearner::AllocateGPUMemory() {
   }
   // working on the remaining (less than dword_features_) feature groups
   if (k != 0) {
-    Feature4* host4 = host4_ptrs[0];
+    Feature4* host4 = host4_vecs[0];
+    //::OpenCL Feature4* host4 = host4_ptrs[0];
     if (dword_features_ == 8) {
       memset(host4, 0, num_data_ * sizeof(Feature4));
     }
@@ -557,8 +571,9 @@ void CUDATreeLearner::AllocateGPUMemory() {
       }
     }
     // copying the last 1 to (dword_features - 1) feature-groups in the last tuple
-    queue_.enqueue_write_buffer(device_features_->get_buffer(),
-                        (num_dense_feature4_ - 1) * num_data_ * sizeof(Feature4), num_data_ * sizeof(Feature4), host4);
+    CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(&device_features_[(num_dense_feature4_ - 1) * num_data_], host4, num_data_ * sizeof(Feature4), cudaMemcpyDefault, stream_));
+    //::OpenCL queue_.enqueue_write_buffer(device_features_->get_buffer(),
+    //::OpenCL                     (num_dense_feature4_ - 1) * num_data_ * sizeof(Feature4), num_data_ * sizeof(Feature4), host4);
     #if GPU_DEBUG >= 1
     printf("Last features copied to device\n");
     #endif
@@ -568,8 +583,9 @@ void CUDATreeLearner::AllocateGPUMemory() {
   }
   // deallocate pinned space for feature copying
   for (int i = 0; i < nthreads; ++i) {
-      queue_.enqueue_unmap_buffer(host4_bufs[i], host4_ptrs[i]);
-      host4_bufs[i] = boost::compute::buffer();
+      //::OpenCL queue_.enqueue_unmap_buffer(host4_bufs[i], host4_ptrs[i]);
+      CUDASUCCESS_OR_FATAL(cudaFree(host4_bufs[i]));
+      //::OpenCL host4_bufs[i] = boost::compute::buffer();
       boost::alignment::aligned_free(host4_vecs[i]);
   }
   // data transfer time
@@ -831,7 +847,9 @@ void CUDATreeLearner::BeforeTrain() {
   // We start copying as early as possible, instead of at ConstructHistogram().
   if (!use_bagging_ && num_dense_feature_groups_) {
     if (!is_constant_hessian_) {
-      hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, num_data_ * sizeof(score_t), hessians_);
+      CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_hessians_, hessians_, num_data_ * sizeof(score_t), cudaMemcpyDefault, stream_));
+      CUDASUCCESS_OR_FATAL(cudaEventRecord(hessians_future_, stream_));
+      //::OpenCL hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, num_data_ * sizeof(score_t), hessians_);
     }
     else {
       // setup hessian parameters only
@@ -843,7 +861,9 @@ void CUDATreeLearner::BeforeTrain() {
         histogram_fulldata_kernels_[i].set_arg(6, const_hessian);
       }
     }
-    gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, num_data_ * sizeof(score_t), gradients_);
+    CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_gradients_, gradients_, num_data_ * sizeof(score_t), cudaMemcpyDefault, stream_));
+    CUDASUCCESS_OR_FATAL(cudaEventRecord(gradients_future_, stream_));
+    //::OpenCL gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, num_data_ * sizeof(score_t), gradients_);
   }
 
   SerialTreeLearner::BeforeTrain();
@@ -858,14 +878,18 @@ void CUDATreeLearner::BeforeTrain() {
     printf("Using bagging, examples count = %d\n", cnt);
     #endif
     // transfer the indices to GPU
-    indices_future_ = boost::compute::copy_async(indices, indices + cnt, device_data_indices_->begin(), queue_);
+    CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_data_indices_, indices, cnt * sizeof(data_size_t), cudaMemcpyDefault, stream_));
+    CUDASUCCESS_OR_FATAL(cudaEventRecord(indices_future_, stream_));
+    //::OpenCL indices_future_ = boost::compute::copy_async(indices, indices + cnt, device_data_indices_->begin(), queue_);
     if (!is_constant_hessian_) {
       #pragma omp parallel for schedule(static)
       for (data_size_t i = 0; i < cnt; ++i) {
         ordered_hessians_[i] = hessians_[indices[i]];
       }
       // transfer hessian to GPU
-      hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, cnt * sizeof(score_t), ordered_hessians_.data());
+      CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_hessians_, ordered_hessians_.data(), cnt * sizeof(score_t), cudaMemcpyDefault, stream_));
+      CUDASUCCESS_OR_FATAL(cudaEventRecord(hessians_future_, stream_));
+      //::OpenCL hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, cnt * sizeof(score_t), ordered_hessians_.data());
     }
     else {
       // setup hessian parameters only
@@ -882,7 +906,9 @@ void CUDATreeLearner::BeforeTrain() {
       ordered_gradients_[i] = gradients_[indices[i]];
     }
     // transfer gradients to GPU
-    gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, cnt * sizeof(score_t), ordered_gradients_.data());
+    CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_gradients_, ordered_gradients_.data(), cnt * sizeof(score_t), cudaMemcpyDefault, stream_));
+    CUDASUCCESS_OR_FATAL(cudaEventRecord(gradients_future_, stream_));
+    //::OpenCL gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, cnt * sizeof(score_t), ordered_gradients_.data());
   }
 }
 
@@ -912,15 +938,19 @@ bool CUDATreeLearner::BeforeFindBestSplit(const Tree* tree, int left_leaf, int r
     Log::Info("Copying indices, gradients and hessians to GPU...");
     printf("Indices size %d being copied (left = %d, right = %d)\n", end - begin,num_data_in_left_child,num_data_in_right_child);
     #endif
-    indices_future_ = boost::compute::copy_async(indices + begin, indices + end, device_data_indices_->begin(), queue_);
+    CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_data_indices_, &indices[begin], (begin - end) * sizeof(data_size_t), cudaMemcpyDefault, stream_));
+    CUDASUCCESS_OR_FATAL(cudaEventRecord(indices_future_, stream_));
+    //::OpenCL indices_future_ = boost::compute::copy_async(indices + begin, indices + end, device_data_indices_->begin(), queue_);
 
     if (!is_constant_hessian_) {
       #pragma omp parallel for schedule(static)
       for (data_size_t i = begin; i < end; ++i) {
         ordered_hessians_[i - begin] = hessians_[indices[i]];
       }
-      // copy ordered hessians to the GPU:
-      hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, (end - begin) * sizeof(score_t), ptr_pinned_hessians_);
+      // copy ordered hessians to the GPU
+      CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_hessians_, pinned_hessians_, (end - begin) * sizeof(score_t), cudaMemcpyDefault, stream_));
+      CUDASUCCESS_OR_FATAL(cudaEventRecord(hessians_future_, stream_));
+      //::OpenCL hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, (end - begin) * sizeof(score_t), ptr_pinned_hessians_);
     }
 
     #pragma omp parallel for schedule(static)
@@ -928,7 +958,9 @@ bool CUDATreeLearner::BeforeFindBestSplit(const Tree* tree, int left_leaf, int r
       ordered_gradients_[i - begin] = gradients_[indices[i]];
     }
     // copy ordered gradients to the GPU:
-    gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, (end - begin) * sizeof(score_t), ptr_pinned_gradients_);
+    CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_gradients_, pinned_gradients_, (end - begin) * sizeof(score_t), cudaMemcpyDefault, stream_));
+    CUDASUCCESS_OR_FATAL(cudaEventRecord(gradients_future_, stream_));
+    //::OpenCL gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, (end - begin) * sizeof(score_t), ptr_pinned_gradients_);
 
     #if GPU_DEBUG >= 2
     Log::Info("Gradients/hessians/indices copied to device with size %d", end - begin);
@@ -953,7 +985,9 @@ bool CUDATreeLearner::ConstructGPUHistogramsAsync(
   
   // copy data indices if it is not null
   if (data_indices != nullptr && num_data != num_data_) {
-    indices_future_ = boost::compute::copy_async(data_indices, data_indices + num_data, device_data_indices_->begin(), queue_);
+    CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_data_indices_, data_indices, num_data * sizeof(data_size_t), cudaMemcpyDefault, stream_));
+    CUDASUCCESS_OR_FATAL(cudaEventRecord(indices_future_, stream_));
+    //::OpenCL indices_future_ = boost::compute::copy_async(data_indices, data_indices + num_data, device_data_indices_->begin(), queue_);
   }
   // generate and copy ordered_gradients if gradients is not null
   if (gradients != nullptr) {
@@ -962,10 +996,14 @@ bool CUDATreeLearner::ConstructGPUHistogramsAsync(
       for (data_size_t i = 0; i < num_data; ++i) {
         ordered_gradients[i] = gradients[data_indices[i]];
       }
-      gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, num_data * sizeof(score_t), ptr_pinned_gradients_);
+      CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_gradients_, pinned_gradients_, num_data * sizeof(score_t), cudaMemcpyDefault, stream_));
+      CUDASUCCESS_OR_FATAL(cudaEventRecord(gradients_future_, stream_));
+      //::OpenCL gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, num_data * sizeof(score_t), ptr_pinned_gradients_);
     }
     else {
-      gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, num_data * sizeof(score_t), gradients);
+      CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_gradients_, gradients, num_data * sizeof(score_t), cudaMemcpyDefault, stream_));
+      CUDASUCCESS_OR_FATAL(cudaEventRecord(gradients_future_, stream_));
+      //::OpenCL gradients_future_ = queue_.enqueue_write_buffer_async(device_gradients_, 0, num_data * sizeof(score_t), gradients);
     }
   }
   // generate and copy ordered_hessians if hessians is not null
@@ -975,10 +1013,14 @@ bool CUDATreeLearner::ConstructGPUHistogramsAsync(
       for (data_size_t i = 0; i < num_data; ++i) {
         ordered_hessians[i] = hessians[data_indices[i]];
       }
-      hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, num_data * sizeof(score_t), ptr_pinned_hessians_);
+      CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_hessians_, pinned_hessians_, num_data * sizeof(score_t), cudaMemcpyDefault, stream_));
+      CUDASUCCESS_OR_FATAL(cudaEventRecord(hessians_future_, stream_));
+      //::OpenCL hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, num_data * sizeof(score_t), ptr_pinned_hessians_);
     }
     else {
-      hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, num_data * sizeof(score_t), hessians);
+      CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_hessians_, hessians, num_data * sizeof(score_t),cudaMemcpyDefault, stream_));
+      CUDASUCCESS_OR_FATAL(cudaEventRecord(hessians_future_, stream_));
+      //::OpenCL hessians_future_ = queue_.enqueue_write_buffer_async(device_hessians_, 0, num_data * sizeof(score_t), hessians);
     }
   }
   // converted indices in is_feature_used to feature-group indices
@@ -1017,7 +1059,8 @@ bool CUDATreeLearner::ConstructGPUHistogramsAsync(
   // if not all feature groups are used, we need to transfer the feature mask to GPU
   // otherwise, we will use a specialized GPU kernel with all feature groups enabled
   if (!use_all_features) {
-    queue_.enqueue_write_buffer(device_feature_masks_, 0, num_dense_feature4_ * dword_features_, ptr_pinned_feature_masks_);
+    CUDASUCCESS_OR_FATAL(cudaMemcpyAsync(device_feature_masks_, pinned_feature_masks_, num_dense_feature4_ * dword_features_, cudaMemcpyDefault, stream_));
+    //::OpenCL queue_.enqueue_write_buffer(device_feature_masks_, 0, num_dense_feature4_ * dword_features_, ptr_pinned_feature_masks_);
   }
   // All data have been prepared, now run the GPU kernel
   GPUHistogram(num_data, use_all_features);

@@ -108,6 +108,8 @@ if(USE_GPU)
 endif(USE_GPU)
 
 if(USE_CUDA)
+    LIST(APPEND CMAKE_CUDA_FLAGS -Xcompiler=-fopenmp)
+
     ADD_DEFINITIONS(-DUSE_CUDA)
     if (NOT DEFINED CMAKE_CUDA_STANDARD)
       set(CMAKE_CUDA_STANDARD 11)
@@ -115,7 +117,6 @@ if(USE_CUDA)
     endif()
     find_package(Boost 1.56.0 COMPONENTS filesystem system REQUIRED)
     include_directories(${Boost_INCLUDE_DIRS})
-
 endif(USE_CUDA) 
 
 if(USE_HDFS)
